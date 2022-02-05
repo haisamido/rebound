@@ -1,5 +1,7 @@
 # This Makefile compiles the shared dynamic library librebound.so
 
+include docker/Makefile
+
 librebound: 
 	$(MAKE) -C src 
 	@ln -f -s src/librebound.so .

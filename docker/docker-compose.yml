@@ -1,0 +1,8 @@
+services:
+  rebound:
+    image: rebound
+    container_name: rebound
+    hostname: rebound
+    command: tail -F /dev/null
+    volumes:
+       - ..:/rebound

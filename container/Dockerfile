@@ -6,12 +6,12 @@ FROM ${OS_TAG}
 RUN apt-get update
 RUN apt-get install -y python3 python3-pip
 
+WORKDIR /rebound 
+
 RUN pip3 install numpy matplotlib
-
 RUN pip3 install rebound
-
 RUN pip3 install reboundx
 
-ENV PATH=/usr/bin/:$PATH
+#RUN pip3 install -v -e .
 
-WORKDIR /rebound 
+ENV PATH=/usr/bin/:$PATH

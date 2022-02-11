@@ -10,6 +10,8 @@ RUN pip3 install numpy matplotlib
 
 RUN pip3 install rebound
 
+RUN pip3 install reboundx
+
 ENV PATH=/usr/bin/:$PATH
 
 WORKDIR /rebound 

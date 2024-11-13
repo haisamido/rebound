@@ -36,9 +36,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <math.h>
-#include <time.h>
 #include <string.h>
 // Uncomment the following line to generate numerical constants with extended precision.
 //#define GENERATE_CONSTANTS
@@ -89,12 +86,23 @@ static const double w[8] = {0.03125, 0.18535815480297927854072897280718075447981
 
 // Machine independent implementation of pow(*,1./7.)
 static double sqrt7(double a){
+    // Without scaling, this is only accurate for arguments in [1e-7, 1e2]
+    // With scaling: [1e-14, 1e8]
+    double scale = 1;
+    while(a<1e-7 && isnormal(a)){
+        scale *= 0.1;
+        a *= 1e7;
+    }
+    while(a>1e2 && isnormal(a)){
+        scale *= 10;
+        a *= 1e-7;
+    }
     double x = 1.;
     for (int k=0; k<20;k++){  // A smaller number should be ok too.
         double x6 = x*x*x*x*x*x;
         x += (a/x6-x)/7.;
     }
-    return x;
+    return x*scale;
 }
 
 static void free_dp7(struct reb_dp7* dp7){
@@ -156,13 +164,15 @@ static inline void add_cs(double* p, double* csp, double inp){
 }
 
 void reb_integrator_ias15_alloc(struct reb_simulation* r){
-    int N3;
+    unsigned int N3;
     if (r->integrator==REB_INTEGRATOR_MERCURIUS){
-        N3 = 3*r->ri_mercurius.encounterN;// mercurius close encounter
+        N3 = 3*r->ri_mercurius.encounter_N;// mercurius close encounter
+    }else if (r->integrator==REB_INTEGRATOR_TRACE && r->ri_trace.mode == REB_TRACE_MODE_KEPLER){
+        N3 = 3*r->ri_trace.encounter_N;// trace close encounter
     }else{ 
         N3 = 3*r->N;
     }
-    if (N3 > r->ri_ias15.allocatedN) {
+    if (N3 > r->ri_ias15.N_allocated) {
         realloc_dp7(&(r->ri_ias15.g),N3);
         realloc_dp7(&(r->ri_ias15.b),N3);
         realloc_dp7(&(r->ri_ias15.csb),N3);
@@ -178,19 +188,19 @@ void reb_integrator_ias15_alloc(struct reb_simulation* r){
         r->ri_ias15.csa0 = realloc(r->ri_ias15.csa0,sizeof(double)*N3);
         double* restrict const csx = r->ri_ias15.csx; 
         double* restrict const csv = r->ri_ias15.csv; 
-        for (int i=0;i<N3;i++){
+        for (unsigned int i=0;i<N3;i++){
             // Kill compensated summation coefficients
             csx[i] = 0;
             csv[i] = 0;
         }
-        r->ri_ias15.allocatedN = N3;
+        r->ri_ias15.N_allocated = N3;
     }
-    if (N3/3 > r->ri_ias15.map_allocated_N){
+    if (N3/3 > r->ri_ias15.N_allocated_map){
         r->ri_ias15.map = realloc(r->ri_ias15.map,sizeof(int)*(N3/3));
-        for (int i=0;i<N3/3;i++){
+        for (unsigned int i=0;i<N3/3;i++){
             r->ri_ias15.map[i] = i;
         }
-        r->ri_ias15.map_allocated_N = N3/3;
+        r->ri_ias15.N_allocated_map = N3/3;
     }
 
 }
@@ -203,10 +213,17 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
     int N;
     int* map; // this map allow for integrating only a selection of particles 
     if (r->integrator==REB_INTEGRATOR_MERCURIUS){// mercurius close encounter
-        N = r->ri_mercurius.encounterN;
+        N = r->ri_mercurius.encounter_N;
         map = r->ri_mercurius.encounter_map;
         if (map==NULL){
-            reb_error(r, "Cannot access MERCURIUS map from IAS15.");
+            reb_simulation_error(r, "Cannot access MERCURIUS map from IAS15.");
+            return 0;
+        }
+    }else if (r->integrator==REB_INTEGRATOR_TRACE && r->ri_trace.mode == REB_TRACE_MODE_KEPLER){// trace close encounter
+        N = r->ri_trace.encounter_N;
+        map = r->ri_trace.encounter_map;
+        if (map==NULL){
+            reb_simulation_error(r, "Cannot access TRACE map from IAS15.");
             return 0;
         }
     }else{ 
@@ -215,7 +232,7 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
     }
     const int N3 = 3*N;
     
-    // reb_update_acceleration(); // Not needed. Forces are already calculated in main routine.
+    // reb_simulation_update_acceleration(); // Not needed. Forces are already calculated in main routine.
     
     double* restrict const csx = r->ri_ias15.csx; 
     double* restrict const csv = r->ri_ias15.csv; 
@@ -303,7 +320,7 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
             r->ri_ias15.iterations_max_exceeded++;
             const int integrator_iterations_warning = 10;
             if (r->ri_ias15.iterations_max_exceeded==integrator_iterations_warning ){
-                reb_warning(r, "At least 10 predictor corrector loops in IAS15 did not converge. This is typically an indication of the timestep being too large.");
+                reb_simulation_warning(r, "At least 10 predictor corrector loops in IAS15 did not converge. This is typically an indication of the timestep being too large.");
             }
             break;                              // Quit predictor corrector loop
         }
@@ -353,7 +370,7 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
             }
 
 
-            reb_update_acceleration(r);             // Calculate forces at interval n
+            reb_simulation_update_acceleration(r);             // Calculate forces at interval n
             if (r->calculate_megno){
                 integrator_megno_thisdt += w[n] * r->t * reb_tools_megno_deltad_delta(r);
             }
@@ -466,7 +483,7 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
                         add_cs(&(b.p6[k]), &(csb.p6[k]), tmp);
                         
                         // Monitor change in b.p6[k] relative to at[k]. The predictor corrector scheme is converged if it is close to 0.
-                        if (r->ri_ias15.epsilon_global){
+                        if (r->ri_ias15.adaptive_mode!=0){
                             const double ak  = fabs(at[k]);
                             if (isnormal(ak) && ak>maxak){
                                 maxak = ak;
@@ -484,7 +501,7 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
                             }
                         }
                     } 
-                    if (r->ri_ias15.epsilon_global){
+                    if (r->ri_ias15.adaptive_mode!=0){
                         predictor_corrector_error = maxb6ktmp/maxak;
                     }
                     
@@ -498,59 +515,103 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
     // Find new timestep
     const double dt_done = r->dt;
     
+    double dt_new;
     if (r->ri_ias15.epsilon>0){
         // Estimate error (given by last term in series expansion) 
         // There are two options:
-        // r->ri_ias15.epsilon_global==1  (default)
+        // TODO: There are now three options. Update documentation.
+        // r->ri_ias15.adaptive_mode==1 (used to be default until January 2024)
         //   First, we determine the maximum acceleration and the maximum of the last term in the series. 
         //   Then, the two are divided.
-        // r->ri_ias15.epsilon_global==0
+        // r->ri_ias15.adaptive_mode==0
         //   Here, the fractional error is calculated for each particle individually and we use the maximum of the fractional error.
         //   This might fail in cases where a particle does not experience any (physical) acceleration besides roundoff errors. 
-        double integrator_error = 0.0;
         unsigned int Nreal = N - r->N_var;
-        if (r->ri_ias15.epsilon_global){
-            double maxak = 0.0;
-            double maxb6k = 0.0;
-            for(int i=0;i<Nreal;i++){ // Looping over all particles and all 3 components of the acceleration. 
-                // Note: Before December 2020, N-N_var, was simply N. This change should make timestep choices during
-                // close encounters more stable if variational particles are present.
-                int mi = map[i];
-                const double v2 = particles[mi].vx*particles[mi].vx+particles[mi].vy*particles[mi].vy+particles[mi].vz*particles[mi].vz;
-                const double x2 = particles[mi].x*particles[mi].x+particles[mi].y*particles[mi].y+particles[mi].z*particles[mi].z;
-                // Skip slowly varying accelerations
-                if (fabs(v2*r->dt*r->dt/x2) < 1e-16) continue;
-                for(int k=3*i;k<3*(i+1);k++) { 
-                    const double ak  = fabs(at[k]);
-                    if (isnormal(ak) && ak>maxak){
-                        maxak = ak;
+        if (r->ri_ias15.adaptive_mode<2){ // Old adaptive timestepping methods
+            double integrator_error = 0.0; // Try to estimate integrator error based on last polynomial
+            if (r->ri_ias15.adaptive_mode==1){
+                double maxa = 0.0;
+                double maxj = 0.0;
+                for(unsigned int i=0;i<Nreal;i++){ // Looping over all particles and all 3 components of the acceleration. 
+                                          // Note: Before December 2020, N-N_var, was simply N. This change should make timestep choices during
+                                          // close encounters more stable if variational particles are present.
+                    int mi = map[i];
+                    const double v2 = particles[mi].vx*particles[mi].vx+particles[mi].vy*particles[mi].vy+particles[mi].vz*particles[mi].vz;
+                    const double x2 = particles[mi].x*particles[mi].x+particles[mi].y*particles[mi].y+particles[mi].z*particles[mi].z;
+                    // Skip slowly varying accelerations
+                    if (fabs(v2*r->dt*r->dt/x2) < 1e-16) continue;
+                    for(unsigned int k=3*i;k<3*(i+1);k++) {
+                        const double ak  = fabs(at[k]);
+                        if (isnormal(ak) && ak>maxa){
+                            maxa = ak;
+                        }
+                        const double b6k = fabs(b.p6[k]);
+                        if (isnormal(b6k) && b6k>maxj){
+                            maxj = b6k;
+                        }
                     }
-                    const double b6k = fabs(b.p6[k]); 
-                    if (isnormal(b6k) && b6k>maxb6k){
-                        maxb6k = b6k;
+                    integrator_error = maxj/maxa;
+                }
+            }else{ // adaptive_mode == 0
+                for(unsigned int k=0;k<N3;k++) {
+                    const double ak  = at[k];
+                    const double bk = b.p6[k];
+                    const double errork = fabs(bk/ak);
+                    if (isnormal(errork) && errork>integrator_error){
+                        integrator_error = errork;
                     }
                 }
             }
-            integrator_error = maxb6k/maxak;
-        }else{
-            for(int k=0;k<N3;k++) {
-                const double ak  = at[k];
-                const double b6k = b.p6[k]; 
-                const double errork = fabs(b6k/ak);
-                if (isnormal(errork) && errork>integrator_error){
-                    integrator_error = errork;
+            // Use error estimate to predict new timestep
+            if  (isnormal(integrator_error)){
+                dt_new = sqrt7(r->ri_ias15.epsilon/integrator_error)*dt_done;
+            }else{  // In the rare case that the error estimate doesn't give a finite number (e.g. when all forces accidentally cancel up to machine precission).
+                dt_new = dt_done/safety_factor; // by default, increase timestep a little
+            };
+        }else{ // adaptive_mode >= 2 (New adaptive timestepping method, default since January 2024)
+            double min_timescale2 = INFINITY;  // note factor of dt_done**2 not included
+            for(unsigned int i=0;i<Nreal;i++){
+                double a0i = 0; //accelertation at beginning of timestep
+                double y2 = 0;  //accalaeration at end of timestep
+                double y3 = 0;  //jerk
+                double y4 = 0;  //snap
+                double y5 = 0; // crackle
+                // All of the above are squared.
+                for(unsigned int k=3*i;k<3*(i+1);k++) {
+                    a0i += a0[k]*a0[k];
+                    double tmp = a0[k] + b.p0[k] + b.p1[k] + b.p2[k] + b.p3[k] + b.p4[k] + b.p5[k] + b.p6[k];
+                    y2 += tmp*tmp;
+                    tmp = b.p0[k] + 2.* b.p1[k] + 3.* b.p2[k] + 4.* b.p3[k] + 5.* b.p4[k] + 6.* b.p5[k] + 7.* b.p6[k];
+                    y3 += tmp*tmp;
+                    tmp = 2.* b.p1[k] + 6.* b.p2[k] + 12.* b.p3[k] + 20.* b.p4[k] + 30.* b.p5[k] + 42.* b.p6[k];
+                    y4 += tmp*tmp;
+                    tmp = 6.* b.p2[k] + 24.* b.p3[k] + 60.* b.p4[k] + 120.* b.p5[k] + 210.* b.p6[k];
+                    y5 += tmp*tmp;
                 }
+                if (!isnormal(a0i)){
+                    // Skipp particles which do not experience any acceleration or
+                    // have acceleration which is inf or Nan.
+                    continue;
+                }
+                double timescale2 = 0;
+                if (r->ri_ias15.adaptive_mode==2){
+                    timescale2 = 2.*y2/(y3+sqrt(y4*y2)); // PRS23
+                }else if (r->ri_ias15.adaptive_mode==3){ // adaptive_mode==3
+                    timescale2 = (sqrt(y2*y4)+y3) / (sqrt(y3*y5)+y4); // A85
+                }
+
+                if (isnormal(timescale2) && timescale2<min_timescale2){
+                    min_timescale2 = timescale2;
+                }
+            }
+            if (isnormal(min_timescale2)){
+                // Numerical factor below is there to match timestep to that of adaptive_mode==0 and default epsilon
+                dt_new = sqrt(min_timescale2) * dt_done * sqrt7(r->ri_ias15.epsilon*5040.0);
+            }else{
+                dt_new = dt_done/safety_factor; // by default, increase timestep a little
             }
         }
 
-        double dt_new;
-        if  (isnormal(integrator_error)){   
-            // if error estimate is available increase by more educated guess
-            dt_new = sqrt7(r->ri_ias15.epsilon/integrator_error)*dt_done;
-        }else{                  // In the rare case that the error estimate doesn't give a finite number (e.g. when all forces accidentally cancel up to machine precission).
-            dt_new = dt_done/safety_factor; // by default, increase timestep a little
-        }
-        
         if (fabs(dt_new)<r->ri_ias15.min_dt) dt_new = copysign(r->ri_ias15.min_dt,dt_new);
         
         if (fabs(dt_new/dt_done) < safety_factor) { // New timestep is significantly smaller.
@@ -578,7 +639,9 @@ static int reb_integrator_ias15_step(struct reb_simulation* r) {
             return 0; // Step rejected. Do again. 
         }       
         if (fabs(dt_new/dt_done) > 1.0) {   // New timestep is larger.
-            if (dt_new/dt_done > 1./safety_factor) dt_new = dt_done /safety_factor; // Don't increase the timestep by too much compared to the last one.
+            if (dt_new/dt_done > 1./safety_factor){
+                dt_new = dt_done /safety_factor; // Don't increase the timestep by too much compared to the last one.
+            }
         }
         r->dt = dt_new;
     }
@@ -713,7 +776,7 @@ void reb_integrator_ias15_part2(struct reb_simulation* r){
 void reb_integrator_ias15_synchronize(struct reb_simulation* r){
 }
 void reb_integrator_ias15_clear(struct reb_simulation* r){
-    const int N3 = r->ri_ias15.allocatedN;
+    const int N3 = r->ri_ias15.N_allocated;
     if (N3){
         clear_dp7(&(r->ri_ias15.g),N3);
         clear_dp7(&(r->ri_ias15.e),N3);
@@ -733,8 +796,8 @@ void reb_integrator_ias15_clear(struct reb_simulation* r){
 }
 
 void reb_integrator_ias15_reset(struct reb_simulation* r){
-    r->ri_ias15.allocatedN  = 0;
-    r->ri_ias15.map_allocated_N  = 0;
+    r->ri_ias15.N_allocated  = 0;
+    r->ri_ias15.N_allocated_map  = 0;
     free_dp7(&(r->ri_ias15.g));
     free_dp7(&(r->ri_ias15.e));
     free_dp7(&(r->ri_ias15.b));

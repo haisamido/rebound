@@ -2,10 +2,119 @@ import rebound
 import unittest
 import math
 import rebound.data
-import warnings
+
+
+def derivatives_ho(ode, yDot, y, t):
+    m = 1.
+    k = 100.
+    yDot[0] = y[1]
+    yDot[1] = -k/m*y[0]
+
+class TestIntegratorBSHarmonic(unittest.TestCase):
+    def test_bs_harmonic_only(self):
+        sim = rebound.Simulation()
+        sim.integrator = "BS"
+        ode_ho = sim.create_ode(length=2, needs_nbody=False)
+        ode_ho.derivatives = derivatives_ho
+
+        ode_ho.y[0] = 1. 
+        ode_ho.y[1] = 0. # zero velocity
+
+        sim.integrate(20.*math.pi)
+        self.assertLess(math.fabs(ode_ho.y[0]-1.),2e-10)
+        self.assertLess(math.fabs(ode_ho.y[1]),2e-9)
+   
+    def test_bs_harmonic_only_low_eps(self):
+        sim = rebound.Simulation()
+        sim.integrator = "BS"
+        sim.ri_bs.eps_abs = 1e-5
+        sim.ri_bs.eps_rel = 1e-5
+        ode_ho = sim.create_ode(length=2, needs_nbody=False)
+        ode_ho.derivatives = derivatives_ho
+
+        ode_ho.y[0] = 1. 
+        ode_ho.y[1] = 0. # zero velocity
+
+        sim.integrate(20.*math.pi)
+        self.assertLess(math.fabs(ode_ho.y[0]-1.),2e-8)
+        self.assertLess(math.fabs(ode_ho.y[1]),5e-6)
     
+    def test_bs_harmonic_only_high_eps(self):
+        sim = rebound.Simulation()
+        sim.integrator = "BS"
+        sim.ri_bs.eps_abs = 1e-10
+        sim.ri_bs.eps_rel = 1e-10
+        ode_ho = sim.create_ode(length=2, needs_nbody=False)
+        ode_ho.derivatives = derivatives_ho
+
+        ode_ho.y[0] = 1. 
+        ode_ho.y[1] = 0. # zero velocity
+
+        sim.integrate(20.*math.pi)
+        self.assertLess(math.fabs(ode_ho.y[0]-1.),1e-10)
+        self.assertLess(math.fabs(ode_ho.y[1]),1e-10)
+    
+    
+    def test_bs_harmonic_with_nbody(self):
+        sim = rebound.Simulation()
+        sim.add(m=1)
+        sim.add(m=1e-3,a=1,e=0.123);
+        sim.add(m=1e-3,a=2.6,e=0.123);
+        sim.integrator = "BS"
+        ode_ho = sim.create_ode(length=2, needs_nbody=False)
+        ode_ho.derivatives = derivatives_ho
+
+        ode_ho.y[0] = 1. 
+        ode_ho.y[1] = 0. # zero velocity
+
+        sim.integrate(20.*math.pi)
+        self.assertLess(math.fabs(ode_ho.y[0]-1.),2e-10)
+        self.assertLess(math.fabs(ode_ho.y[1]),2e-9)
+    
+    def test_bs_harmonic_with_nbody_coupledy(self):
+        sim = rebound.Simulation()
+        sim.add(m=1)
+        sim.add(m=1e-3,a=1,e=0.123);
+        sim.add(m=1e-3,a=2.6,e=0.123);
+        sim.integrator = "BS"
+        ode_ho = sim.create_ode(length=2, needs_nbody=True)
+        ode_ho.derivatives = derivatives_ho
+
+        ode_ho.y[0] = 1. 
+        ode_ho.y[1] = 0. # zero velocity
+
+        sim.integrate(20.*math.pi)
+        self.assertLess(math.fabs(ode_ho.y[0]-1.),2e-10)
+        self.assertLess(math.fabs(ode_ho.y[1]),2e-9)
+
+
+    
+def af(simp):
+    sim = simp.contents
+    x = sim.particles[0].x
+    y = sim.particles[0].y
+    z = sim.particles[0].z
+    r = math.sqrt(x*x+y*y+z*z)
+    sim.particles[0].ax -= x/(r*r*r)
+    sim.particles[0].ay -= y/(r*r*r)
+    sim.particles[0].az -= z/(r*r*r)
     
 class TestIntegratorBS(unittest.TestCase):
+    def test_bs_additional_force_only(self):
+        sim = rebound.Simulation()
+        sim.additional_forces = af
+        sim.integrator = "bs"
+        eps = 1e-11
+        sim.ri_bs.eps_rel = eps
+        sim.ri_bs.eps_abs = eps
+        sim.add(m=0,x=1,vy=1)
+        sim.integrate(2.*math.pi)
+        self.assertLess(math.fabs(sim.particles[0].x-1.),5*eps)
+        self.assertLess(math.fabs(sim.particles[0].vy-1.),5*eps)
+        self.assertLess(math.fabs(sim.particles[0].y),5*eps)
+        self.assertLess(math.fabs(sim.particles[0].vx),5*eps)
+
+
     def test_bs_outersolarsystem(self):
         for eps in [1e-5, 1e-7, 1e-9, 1e-11]:
             sim = rebound.Simulation()
@@ -13,9 +122,9 @@ class TestIntegratorBS(unittest.TestCase):
             sim.integrator = "bs"
             sim.ri_bs.eps_rel = eps
             sim.ri_bs.eps_abs = eps
-            e0 = sim.calculate_energy()
+            e0 = sim.energy()
             sim.integrate(1000)
-            e1 = sim.calculate_energy()
+            e1 = sim.energy()
             self.assertLess(math.fabs((e0-e1)/e1),5*eps)
 
     def test_bs_high_e(self):
@@ -27,9 +136,9 @@ class TestIntegratorBS(unittest.TestCase):
             sim.integrator = "bs"
             sim.ri_bs.eps_rel = eps
             sim.ri_bs.eps_abs = eps
-            e0 = sim.calculate_energy()
+            e0 = sim.energy()
             sim.integrate(1000)
-            e1 = sim.calculate_energy()
+            e1 = sim.energy()
             self.assertLess(math.fabs((e0-e1)/e1),60*eps)
     
     def test_bs_inout(self):
@@ -39,11 +148,11 @@ class TestIntegratorBS(unittest.TestCase):
         sim.integrator = "bs"
         sim.ri_bs.eps_rel = eps
         sim.ri_bs.eps_abs = eps
-        sim.save("sim0.bin")
+        sim.save_to_file("sim0.bin")
         sim1 = rebound.Simulation("sim0.bin")
         sim.integrate(100)
         sim1.integrate(100)
-        sim1.save("sim1.bin")
+        sim1.save_to_file("sim1.bin")
         sim2 = rebound.Simulation("sim1.bin")
         sim.integrate(200)
         sim1.integrate(200)
@@ -62,9 +171,9 @@ class TestIntegratorBS(unittest.TestCase):
         sim.add(m=1)
         sim.add(m=1e-3,a=1,e=0.1)
         sim.add(m=1e-3,a=2,e=0.1)
-        sim.automateSimulationArchive("test.sa",interval=10, deletefile=True)
+        sim.save_to_file("test.sa",interval=10, delete_file=True)
         sim.integrate(100, exact_finish_time=0)
-        sim1 = rebound.SimulationArchive("test.sa")[-1]
+        sim1 = rebound.Simulationarchive("test.sa")[-1]
         sim.integrate(200, exact_finish_time=0)
         sim1.integrate(200, exact_finish_time=0)
         self.assertEqual(sim.particles[1].x, sim1.particles[1].x)

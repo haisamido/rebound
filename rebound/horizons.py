@@ -1,23 +1,28 @@
 # -*- coding: utf-8 -*-
-
 """
 Pull data from HORIZONS and format it for use as a REBOUND particle. 
 
 """
-from __future__ import print_function
-
 import datetime
 import re
 import warnings
+import sys
+from .units import convert_mass
 
-try:
+HORIZONSBASEURL = "https://ssd.jpl.nasa.gov/api/horizons.api?"
+
+if "pyodide" in sys.modules:
     from urllib.parse import urlencode
-    from urllib.request import urlopen
-except ImportError:
-    from urllib import urlencode
-    from urllib2 import urlopen
-
-__all__ = ["getParticle"]
+    from pyodide.http import open_url as urlopen
+    # Use CORS proxy
+    HORIZONSBASEURL = "https://rebound.hanno-rein.de/api/horizons.api?"
+else:
+    try:
+        from urllib.parse import urlencode
+        from urllib.request import urlopen
+    except ImportError:
+        from urllib import urlencode
+        from urllib2 import urlopen
 
 # Default date for orbital elements is the current time when first particle added, if no date is passed.
 # Cached at the beginning to ensure that all particles are synchronized.
@@ -50,15 +55,18 @@ def api_request(particle, datestart, dateend, plane):
         "VEC_LABELS": quote("NO")
 
     }
-    url = "https://ssd.jpl.nasa.gov/api/horizons.api?" + urlencode(get_params)
+    url =  HORIZONSBASEURL + urlencode(get_params)
     # don't use a context manager for python2 compatibility
     f = urlopen(url)
-    body = f.read().decode()
+    if "pyodide" in sys.modules:
+        body = f.read()
+    else:
+        body = f.read().decode()
     f.close()
     return body
 
 
-def getParticle(particle=None, m=None, x=None, y=None, z=None, vx=None, vy=None, vz=None, primary=None, a=None,
+def query_horizons_for_particle(mass_unit=None, particle=None, m=None, x=None, y=None, z=None, vx=None, vy=None, vz=None, primary=None, a=None,
                 anom=None, e=None, omega=None, inc=None, Omega=None, MEAN=None, date=None, plane="ecliptic", hash=0):
     if plane not in ["ecliptic", "frame"]:
         raise AttributeError(
@@ -93,7 +101,7 @@ def getParticle(particle=None, m=None, x=None, y=None, z=None, vx=None, vy=None,
     else:
         # Assume date is in JD with format JDxxxxxx.xxxx
         datestart = date
-        date_f = float(re.sub("[^0-9\.]","",date))
+        date_f = float(re.sub("[^0-9\\.]","",date))
         dateend = "JD%.8f"%(date_f+0.1)
 
     print("Searching NASA Horizons for '{}'... ".format(particle))
@@ -145,7 +153,11 @@ def getParticle(particle=None, m=None, x=None, y=None, z=None, vx=None, vy=None,
         else:
             print("Found body (Name could not be detected)")
     if m is not None:
-        p.m = m
+        if mass_unit is not None:
+            p.m = convert_mass(m, mass_unit, "kg")
+        else:
+            ## Assume kg
+            p.m = m
     elif idn is not None:
         try:
             p.m = float(

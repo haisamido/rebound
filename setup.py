@@ -1,6 +1,7 @@
 try:
     from setuptools import setup, Extension
 except ImportError:
+    # Legacy distutils import. No longer available on Pyton > 3.12
     from distutils.core import setup, Extension
 from codecs import open
 import os
@@ -17,21 +18,38 @@ try:
     ghash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("ascii")
     ghash_arg = "-DGITHASH="+ghash.strip()
 except:
-    ghash_arg = "-DGITHASH=fd97858219fcefde1b5e848247985364cb45d0ca" #GITHASHAUTOUPDATE
+    ghash_arg = "-DGITHASH=a548a279c439c6ccdbb05e4ded8d5a284dad5df0" #GITHASHAUTOUPDATE
 
 extra_link_args=[]
 if sys.platform == 'darwin':
-    from distutils import sysconfig
-    vars = sysconfig.get_config_vars()
-    vars['LDSHARED'] = vars['LDSHARED'].replace('-bundle', '-shared')
+    config_vars = sysconfig.get_config_vars()
+    config_vars['LDSHARED'] = config_vars['LDSHARED'].replace('-bundle', '-shared')
     extra_link_args=['-Wl,-install_name,@rpath/librebound'+suffix]
+if sys.platform == 'win32':
+    extra_compile_args=[ghash_arg, '-DLIBREBOUND', '-D_GNU_SOURCE', '-DSERVER']
+else:
+    # Default compile args
+    extra_compile_args=['-fstrict-aliasing', '-O3','-std=c99','-Wno-unknown-pragmas', ghash_arg, '-DLIBREBOUND', '-D_GNU_SOURCE', '-DSERVER', '-fPIC']
+
+# Option to disable FMA in CLANG. 
+FFP_CONTRACT_OFF = os.environ.get("FFP_CONTRACT_OFF", None)
+if FFP_CONTRACT_OFF:
+    extra_compile_args.append('-ffp-contract=off')
+
+# Option to enable AVX512 enabled integrators (WHFast512). 
+AVX512 = os.environ.get("AVX512", None)
+if AVX512:
+    extra_compile_args.append('-march=native')
+    extra_compile_args.append('-DAVX512')
     
 libreboundmodule = Extension('librebound',
                     sources = [ 'src/rebound.c',
                                 'src/integrator_ias15.c',
                                 'src/integrator_whfast.c',
+                                'src/integrator_whfast512.c',
                                 'src/integrator_saba.c',
                                 'src/integrator_mercurius.c',
+                                'src/integrator_trace.c',
                                 'src/integrator_eos.c',
                                 'src/integrator_leapfrog.c',
                                 'src/integrator_bs.c',
@@ -39,10 +57,13 @@ libreboundmodule = Extension('librebound',
                                 'src/integrator_sei.c',
                                 'src/integrator.c',
                                 'src/gravity.c',
+                                'src/server.c',
                                 'src/boundary.c',
                                 'src/display.c',
                                 'src/collision.c',
                                 'src/tools.c',
+                                'src/fmemopen.c',
+                                'src/rotations.c',
                                 'src/derivatives.c',
                                 'src/tree.c',
                                 'src/particle.c',
@@ -54,9 +75,8 @@ libreboundmodule = Extension('librebound',
                                 ],
                     include_dirs = ['src'],
                     define_macros=[ ('LIBREBOUND', None) ],
-                    # Removed '-march=native' for now.
-                    extra_compile_args=['-fstrict-aliasing', '-O3','-std=c99','-Wno-unknown-pragmas', ghash_arg, '-DLIBREBOUND', '-D_GNU_SOURCE', '-fPIC'],
                     extra_link_args=extra_link_args,
+                    extra_compile_args=extra_compile_args,
                     )
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -64,9 +84,10 @@ with open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
 
 setup(name='rebound',
-    version='3.19.2',
+    version='4.4.3',
     description='An open-source multi-purpose N-body code',
     long_description=long_description,
+    long_description_content_type="text/markdown",
     url='https://github.com/hannorein/rebound/',
     author='Hanno Rein',
     author_email='hanno@hanno-rein.de',
@@ -93,7 +114,7 @@ setup(name='rebound',
         'Programming Language :: Python :: 3',
     ],
     keywords='astronomy astrophysics nbody integrator symplectic wisdom-holman',
-    packages=['rebound'],
+    packages=['rebound', 'rebound.integrators'],
     package_data = {'rebound':['rebound.h']},
     install_requires=[],
     tests_require=["numpy","matplotlib"],
